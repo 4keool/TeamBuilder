@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",  // 이전에는 'python' 이었습니다.
+            "request": "launch",
+            "program": "${file}",
+            "args": ["--num_teams", "4", "--repeat", "100", "--data_path", "4월23일/players.json"],
+            "console": "integratedTerminal"
+        }
+    ]
+}
