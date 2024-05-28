@@ -112,3 +112,5 @@ def save_results(best_individual, num_teams, players, repeat, data_path, elapsed
 
     with open(filename, "w", encoding='utf-8') as f:
         json.dump(result_data, f, ensure_ascii=False, indent=4)
+
+    return filename

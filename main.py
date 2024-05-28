@@ -59,7 +59,7 @@ def main():
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"Elapsed Time: {elapsed_time:.2f} seconds")
-    save_results(hof[0], num_teams, players, repeat, data_path, elapsed_time)
+    result_path = save_results(hof[0], num_teams, players, repeat, data_path, elapsed_time)
 
 if __name__ == "__main__":
     main()
