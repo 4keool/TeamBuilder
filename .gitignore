@@ -782,3 +782,5 @@ FodyWeavers.xsd
 # End of https://www.toptal.com/developers/gitignore/api/macos,windows,intellij,visualstudio,visualstudiocode,git,python,venv
 
 *.json
+*.bk
+.tmp.driveupload/*
