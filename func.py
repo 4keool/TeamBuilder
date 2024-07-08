@@ -17,6 +17,10 @@ def load_data(file_path):
     try:
         with open(file_path, "r", encoding="utf-8") as file:
             data = json.load(file)
+        # max 값이 None인 경우 0으로 설정
+        for player in data['players']:
+            if player.get('max') is None:
+                player['max'] = 0
         return data['fixed_assignments'], data['players']
     except FileNotFoundError:
         raise FileNotFoundError("Data file not found.")
@@ -40,41 +44,25 @@ def custom_mutate(individual, indpb, fixed_assignments, players, num_teams):
     return individual,
 
 # 적합도 평가: 팀의 인원 수 및 점수의 균형 평가
-# 현재 사용안함
-def _evaluate(individual, num_teams, players):
-    team_counts = [0] * num_teams
-    team_scores = [0] * num_teams
-    for player, team in zip(players, individual):
-        team_counts[team] += 1
-        team_scores[team] += player['avg']
-    if min(team_counts) < len(players) // num_teams:
-        return (1000,)
-    balance_score = max(team_counts) - min(team_counts)
-    score_variance = sum((score - sum(team_scores) / num_teams) ** 2 for score in team_scores) / num_teams
-    return (balance_score + score_variance,)
-
 def evaluate(individual, num_teams, players):
     team_counts = [0] * num_teams
     team_avg_scores = [0] * num_teams
     team_max_scores = [0] * num_teams
+    
     for player, team in zip(players, individual):
         team_counts[team] += 1
         team_avg_scores[team] += player['avg']
         team_max_scores[team] += player['max']
-
-    # 팀 인원이 너무 적은 경우 높은 패널티 부여
+    
     if min(team_counts) < len(players) // num_teams:
         return (1000,)
-
-    # 팀의 점수 균형 평가 (평균 점수와 최대 점수를 모두 고려)
+    
     team_avg_score_balance = max(team_avg_scores) - min(team_avg_scores)
     team_max_score_balance = max(team_max_scores) - min(team_max_scores)
-
-    # 점수 분산 계산
+    
     avg_score_variance = sum((score - sum(team_avg_scores) / num_teams) ** 2 for score in team_avg_scores) / num_teams
     max_score_variance = sum((score - sum(team_max_scores) / num_teams) ** 2 for score in team_max_scores) / num_teams
-
-    # 최종 적합도 점수: 평균 점수와 최대 점수의 균형 및 분산을 조합
+    
     return (team_avg_score_balance + team_max_score_balance + avg_score_variance + max_score_variance * 0.7,)
 
 # 결과 데이터를 JSON 파일에 저장하는 함수
@@ -82,10 +70,10 @@ def save_results(best_individual, num_teams, players, repeat, data_path, elapsed
     teams = [[] for _ in range(num_teams)]
     for player, team_number in zip(players, best_individual):
         teams[team_number].append(player)
-
+    
     for team in teams:
         team.sort(key=lambda x: x['avg'], reverse=True)
-
+    
     result_data = {
         'parameters': {
             'num_teams': num_teams,
@@ -100,7 +88,7 @@ def save_results(best_individual, num_teams, players, repeat, data_path, elapsed
             } for i, team in enumerate(teams)
         }
     }
-
+    
     dirname = os.path.dirname(data_path)
     if not os.path.exists(dirname):
         os.makedirs(dirname)
@@ -109,8 +97,9 @@ def save_results(best_individual, num_teams, players, repeat, data_path, elapsed
     while os.path.exists(filename):
         filename = os.path.join(dirname, f"result{index}.json")
         index += 1
-
+    
     with open(filename, "w", encoding='utf-8') as f:
         json.dump(result_data, f, ensure_ascii=False, indent=4)
-
+    
     return filename
+
