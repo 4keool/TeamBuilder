@@ -1,28 +1,14 @@
 import time
-import threading
+import numpy as np
+import shutil
 import logging
 from fastapi import FastAPI, UploadFile, Form, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
-from typing import Optional
-import shutil
 from deap import base, creator, tools, algorithms
-import numpy as np
 from load import load_data
 from save import save_results, json_to_png
-from genetic_algorithm import init_individual, custom_mutate, evaluate
 from util import ensure_directory_exists
-
-# 로그 설정
-logging.basicConfig(
-    filename='genetic_algorithm.log',  # 로그를 저장할 파일명
-    level=logging.DEBUG,  # 로그 레벨 설정 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    format='%(asctime)s %(levelname)s:%(message)s'  # 로그 포맷 설정
-)
-
-app = FastAPI()
-
-# 모든 작업 상태를 저장할 딕셔너리 (UUID를 키로 사용)
-tasks = {}
+from genetic_algorithm import init_individual, custom_mutate, evaluate
 
 class TaskState:
     def __init__(self):
@@ -31,10 +17,52 @@ class TaskState:
         self.remaining_time = 0
         self.result_path = None
 
+app = FastAPI()
+tasks = {}
+
 creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
 creator.create("Individual", list, fitness=creator.FitnessMin)
 
-def genetic_algorithm_task(task_id: str, num_teams, repeat, data_path):
+# 로그 설정
+logging.basicConfig(
+    filename='api.log',  # 로그를 저장할 파일명
+    level=logging.DEBUG,  # 로그 레벨 설정 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    format='%(asctime)s %(levelname)s:%(message)s'  # 로그 포맷 설정
+)
+
+def log_task_event(task_id: str, message: str, level: str = "debug"):
+    """
+    로깅 유틸리티 함수
+
+    INPUT:
+    - task_id (str): 요청하는 uuid의 값
+    - message (str): 로그 메세지
+    - level (str): 로그의 레벨을 나타냄
+
+    OUTPUT:
+    - 
+    """
+    log_message = f"Task {task_id} - {message}"
+    if level == "debug":
+        logging.debug(log_message)
+    elif level == "error":
+        logging.error(log_message)
+
+def execute_genetic(task_id: str, num_teams, repeat, data_path):
+    """
+    실제 유전 알고리즘을 실행시키는 함수
+
+    INPUT:
+    - task_id (str): 요청하는 uuid의 값
+    - num_teams : 팀의 수
+    - repeat : 반복 횟수
+    - data_path : players.json 파일의 위치
+
+    OUTPUT:
+    - result.json : 자세한 결과를 담은 json 파일
+    - result.png : 공유를 위해 간략하게 시각화한 이미지 파일
+    """
+
     task = tasks[task_id]
     
     try:
@@ -43,20 +71,10 @@ def genetic_algorithm_task(task_id: str, num_teams, repeat, data_path):
         logging.debug("Loading data...")
         fixed_assignments, players = load_data(data_path)
         logging.debug("Setting up toolbox...")
-        toolbox = base.Toolbox()
-        toolbox.register("individual", init_individual, num_teams, fixed_assignments, players)
-        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-        toolbox.register("mutate", custom_mutate, indpb=0.2, fixed_assignments=fixed_assignments, players=players, num_teams=num_teams)
-        toolbox.register("evaluate", evaluate, num_teams=num_teams, players=players)
-        toolbox.register("mate", tools.cxTwoPoint)
-        toolbox.register("select", tools.selTournament, tournsize=3)
+        toolbox = setup_toolbox(num_teams, fixed_assignments, players)
 
         logging.debug("Creating population...")
-        population = toolbox.population(n=300)
-        hof = tools.HallOfFame(1)
-        stats = tools.Statistics(lambda ind: ind.fitness.values)
-        stats.register("avg", np.mean)
-        stats.register("min", min)
+        population, hof, stats = initialize_population(toolbox)
 
         for gen in range(repeat):
             if task.cancelled:
@@ -64,39 +82,139 @@ def genetic_algorithm_task(task_id: str, num_teams, repeat, data_path):
                 break
             logging.debug(f"Generation {gen+1}...")
 
-            gen_start_time = time.time()
-
-            population = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2)
-            fits = toolbox.map(toolbox.evaluate, population)
-            for fit, ind in zip(fits, population):
-                ind.fitness.values = fit
-            population = toolbox.select(population, len(population))
-            hof.update(population)
-
-            # 진행률 및 남은 시간 업데이트
-            elapsed_time = time.time() - start_time
-            progress = (gen + 1) / repeat * 100
-            task.progress = progress
-            
-            gen_time = time.time() - gen_start_time
-            remaining_time = gen_time * (repeat - gen - 1)
-            task.remaining_time = int(remaining_time)
-
-        total_processing_time = time.time() - start_time
-        logging.debug("Task {task_id} Saving results...")
-        result_path = save_results(hof[0], num_teams, players, repeat, data_path, total_processing_time)
-        logging.debug(f"Results saved to {result_path}")
-
-        png_path = json_to_png(result_path)
-        task.result_path = png_path
-        logging.debug(f"PNG saved to {png_path}")
+            process_generation(task_id, task, toolbox, population, hof, gen, repeat, start_time)
     except Exception as e:
         logging.error(f"Task {task_id} failed: {e}")
         task.result_path = None
     finally:
-        task.progress = 100.0
-        task.remaining_time = 0
+        finalize_task(task_id, task, hof, num_teams, players, repeat, data_path, start_time)
 
+def setup_toolbox(num_teams, fixed_assignments, players):
+    """
+    유전 알고리즘을 실행하기 위한 Toolbox 설정
+
+    INPUT:
+    - num_teams : 팀의 수
+    - fixed_assignments : 
+    - players : 
+
+    OUTPUT:
+    - toolbox
+    """
+
+    toolbox = base.Toolbox()
+    toolbox.register("individual", init_individual, num_teams, fixed_assignments, players)
+    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+    toolbox.register("mutate", custom_mutate, indpb=0.2, fixed_assignments=fixed_assignments, players=players, num_teams=num_teams)
+    toolbox.register("evaluate", evaluate, num_teams=num_teams, players=players)
+    toolbox.register("mate", tools.cxTwoPoint)
+    toolbox.register("select", tools.selTournament, tournsize=3)
+    return toolbox
+
+def initialize_population(toolbox):
+    """
+    초기 Population 설정
+
+    INPUT:
+    - toolbox
+
+    OUTPUT:
+    - population
+    - hof
+    - stats
+    """
+
+    population = toolbox.population(n=300)
+    hof = tools.HallOfFame(1)
+    stats = tools.Statistics(lambda ind: ind.fitness.values)
+    stats.register("avg", np.mean)
+    stats.register("min", min)
+    return population, hof, stats
+
+def process_generation(task_id, task, toolbox, population, hof, gen, repeat, start_time):
+    """
+    세대별 작업 처리
+
+    INPUT:
+    - task_id (str): 요청하는 uuid의 값
+    - task
+    - toolbox
+    - population
+    - hof
+    - gen
+    - repeat
+    - start_time
+
+    OUTPUT:
+    - population
+    - hof
+    """
+
+    gen_start_time = time.time()
+
+    population = algorithms.varAnd(population, toolbox, cxpb=0.5, mutpb=0.2)
+    fits = toolbox.map(toolbox.evaluate, population)
+    for fit, ind in zip(fits, population):
+        ind.fitness.values = fit
+    population = toolbox.select(population, len(population))
+    hof.update(population)
+
+    update_progress(task_id, task, gen, repeat, start_time, gen_start_time)
+
+def update_progress(task_id, task, gen, repeat, start_time, gen_start_time):
+    """
+    작업 진행률 및 남은 시간 업데이트
+
+    INPUT:
+    - task_id (str): 요청하는 uuid의 값
+    - task
+    - gen
+    - repeat
+    - start_time
+    - gen_start_time
+
+    OUTPUT:
+    - task.progress
+    - task.remaining_time
+    """
+
+    task.progress = (gen + 1) / repeat * 100
+
+    elapsed_time = time.time() - start_time
+    gen_time = time.time() - gen_start_time
+    remaining_time = gen_time * (repeat - gen - 1)
+    task.remaining_time = int(remaining_time)
+
+    log_task_event(task_id, f"Progress: {task.progress:.2f}%, Remaining Time: {task.remaining_time} seconds")
+
+def finalize_task(task_id, task, hof, num_teams, players, repeat, data_path, start_time):
+    """
+    작업 종료 후 처리
+    
+    INPUT:
+    - task_id (str): 요청하는 uuid의 값
+    - task
+    - hof
+    - num_teams
+    - players
+    - repeat
+    - data_path
+    - start_time
+
+    OUTPUT:
+    - total_processing_time
+    - task.result_path
+    - task.progress
+    - task.remaining_time
+    """
+    total_processing_time = time.time() - start_time
+    result_path = save_results(hof[0], num_teams, players, repeat, data_path, total_processing_time)
+    task.result_path = json_to_png(result_path)
+    
+    log_task_event(task_id, f"Results saved to {task.result_path}")
+    
+    task.progress = 100.0
+    task.remaining_time = 0
 
 @app.post("/start-task/")
 async def start_task(
@@ -106,7 +224,14 @@ async def start_task(
     num_teams: int = Form(...),
     repeat: int = Form(...),
 ):
+    """
+    작업을 시작하는 부분
     
+    uuid: 클라이언트가 제공한 고유 식별자 (UUID)
+    file: 계삭하려는 players.json 파일이 담겨있음
+    num_teams: 팀의 수
+    repeat: 반복 횟수
+    """
     if uuid in tasks and tasks[uuid].progress < 100:
         return JSONResponse({"message": "Another task is already running. Please wait until it finishes or cancel it first."}, status_code=400)
 
@@ -119,16 +244,18 @@ async def start_task(
         logging.error(f"Failed to save file: {e}")
         return JSONResponse({"message:": "Failed to save file."}, status_code=500)
 
-    # 새로운 작업 상태를 생성하고 UUID에 매핑
-    task_state = TaskState()
-    tasks[uuid] = task_state
-
-    background_tasks.add_task(genetic_algorithm_task, uuid, num_teams, repeat, data_path)
+    tasks[uuid] = TaskState()
+    background_tasks.add_task(execute_genetic, uuid, num_teams, repeat, data_path)
 
     return {"message": "Task started", "uuid": uuid}
 
 @app.get("/progress/")
 async def get_progress(uuid: str = Form(...)):
+    """
+    작업 진행사항을 확인하는 부분
+    
+    uuid: 클라이언트가 제공한 고유 식별자 (UUID)
+    """
     task = tasks.get(uuid)
 
     if not task:
@@ -169,6 +296,17 @@ async def get_result(uuid: str = Form(...)):
     else:
         # 진행 상황을 반환
         return {"status": "Task in progress", "progress": task.progress}
+
+@app.get("/init-file/")
+async def get_initial_file():
+    """
+    초기 파일을 제공하는 API 엔드포인트.
+    
+    Returns:
+    FileResponse: 초기 파일을 포함한 응답
+    """
+    file_path = "players.backup"  # 초기 파일 경로를 지정합니다.
+    return FileResponse(file_path, media_type='application/json', filename="players_.json")
 
 if __name__ == "__main__":
     import uvicorn

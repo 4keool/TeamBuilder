@@ -154,18 +154,3 @@ def json_to_png(json_path):
 
     # 생성된 PNG 파일의 경로를 반환합니다.
     return png_image_path
-
-
-import shutil
-from fastapi import UploadFile
-import logging
-
-def save_uploaded_file(file: UploadFile, data_path: str) -> bool:
-    """업로드된 파일 저장"""
-    try:
-        with open(data_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        return True
-    except Exception as e:
-        logging.error(f"Failed to save file: {e}")
-        return False
