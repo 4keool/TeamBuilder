@@ -23,3 +23,7 @@ def load_data(file_path):
         raise FileNotFoundError("Data file not found.")
     except json.JSONDecodeError:
         raise json.JSONDecodeError("Error decoding JSON.")
+
+def load_prev_json(filepath):
+    with open(filepath, 'r', encoding='utf-8') as f:
+        return json.load(f)

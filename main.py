@@ -1,3 +1,4 @@
+import os
 import time
 import numpy as np
 import shutil
@@ -5,8 +6,8 @@ import logging
 from fastapi import FastAPI, UploadFile, Form, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from deap import base, creator, tools, algorithms
-from load import load_data
-from save import save_results, json_to_png
+from load import load_data, load_prev_json
+from save import save_results, json_to_png, save_update_team
 from util import ensure_directory_exists
 from genetic_algorithm import init_individual, custom_mutate, evaluate
 
@@ -216,6 +217,48 @@ def finalize_task(task_id, task, hof, num_teams, players, repeat, data_path, sta
     task.progress = 100.0
     task.remaining_time = 0
 
+def swap_members(data, swap_info):
+    """
+    팀 멤버들의 자리를 옮긴다.
+    
+    INPUT:
+    - data: 원본 데이터가 들어있다.
+    - swap_info: swap 해야하는 정보가 들어있다.
+
+    OUTPUT:
+    - update_data: 저장할 json 데이터가 들어있다.
+    """
+    swap_pairs = [pair.split(',') for pair in swap_info.split('|')]
+    swap_dict = {item.strip(): None for pair in swap_pairs for item in pair}
+
+    team_data = data['results']
+
+    for team_name, team_info in team_data.items():
+        members = team_info['Members']
+        for member in members:
+            if member in swap_dict:
+                swap_dict[member] = (team_name, member, members[member])
+
+    for member1, member2 in swap_pairs:
+        member1, member2 = member1.strip(), member2.strip()
+        team1, name1, score1 = swap_dict[member1]
+        team2, name2, score2 = swap_dict[member2]
+
+        data['results'][team1]['Members'].pop(name1)
+        data['results'][team2]['Members'].pop(name2)
+        
+        data['results'][team1]['Members'][member2] = score2
+        data['results'][team2]['Members'][member1] = score1
+        
+        data['results'][team1]['Total Score'] += score2 - score1
+        data['results'][team2]['Total Score'] += score1 - score2
+
+    for team_name, team_info in team_data.items():
+        sorted_members = dict(sorted(team_info['Members'].items(), key=lambda item: item[1], reverse=True))
+        data['results'][team_name]['Members'] = sorted_members
+    
+    return data
+
 @app.post("/start-task/")
 async def start_task(
     background_tasks: BackgroundTasks,
@@ -295,7 +338,7 @@ async def get_result(uuid: str = Form(...)):
         return FileResponse(task.result_path, media_type='image/png', filename="result.png")
     else:
         # 진행 상황을 반환
-        return {"status": "Task in progress", "progress": task.progress}
+        return {"status": "Task in progress", "progress": task.progress, "remaining time": task.remaining_time}
 
 @app.get("/init-file/")
 async def get_initial_file():
@@ -307,6 +350,46 @@ async def get_initial_file():
     """
     file_path = "players.backup"  # 초기 파일 경로를 지정합니다.
     return FileResponse(file_path, media_type='application/json', filename="players_.json")
+
+@app.post("/swap/")
+async def swap_teams(uuid: str = Form(...),
+    swap_info: str = Form(...)):
+    """
+    결과값을 수정하기 위한 APIA 엔드포인트.
+
+    uuid: 클라이언트가 제공한 고유 식별자 (UUID)
+    swapinfo: 어떤 값들은 변경할지에 대한 정보
+    """
+    task = tasks.get(uuid)
+    if not task:
+        return {"error": "Invalid UUID or task not found"}
+
+    if task.result_path != None:
+        prev_png_path = task.result_path
+        prev_json_path = os.path.splitext(prev_png_path)[0] + ".json"
+
+        data = load_prev_json(prev_json_path)
+
+        if 'parameters' not in data:
+            data['parameters'] = {}
+        data['parameters']['original_data'] = prev_json_path
+        data['parameters']['swap_info'] = swap_info
+
+        task.progress = 0
+        task.remaining_time = 9999
+
+        update_data = swap_members(data, swap_info)
+        new_json_path = save_update_team(prev_json_path, update_data)
+        task.result_path = json_to_png(new_json_path)
+
+        task.progress = 100
+        task.remaining_time = 0
+        return {"update team data"}
+
+    else:
+        log_task_event(uuid, f"else")
+        return {"status": "Task in progress", "progress": task.progress, "remaining time": task.remaining_time}
+
 
 if __name__ == "__main__":
     import uvicorn

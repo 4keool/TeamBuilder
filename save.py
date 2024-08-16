@@ -154,3 +154,19 @@ def json_to_png(json_path):
 
     # 생성된 PNG 파일의 경로를 반환합니다.
     return png_image_path
+
+def save_update_team(filepath, data):
+    dirname = os.path.dirname(filepath)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+    
+    filename = os.path.join(dirname, "result.json")
+    index = 1
+    while os.path.exists(filename):
+        filename = os.path.join(dirname, f"result{index}.json")
+        index += 1
+    
+    with open(filename, "w", encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+    return filename
